@@ -52,9 +52,6 @@ COPY --chown=appuser:appuser . /app
 # Install Python packages specified in requirements.txt
 RUN pip3 install --no-cache-dir -r requirements.txt --break-system-packages
 
-# Switch back to root user for DB initialization (if necessary)
-RUN python3 init_db.py
-
 # Expose the port the app runs on
 EXPOSE 5000
 

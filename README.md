@@ -29,30 +29,32 @@ Note: the code has been tested with `Python3` on `Linux` and `Windows 10`.
 
 1. **Modify or Create `config.json`:**
 
-   - Copy `config.json.example` to `config.json` and adjust the settings as needed.  
-   - At a minimum, you **must** modify the `currency` field.
-   - Some currency symbols. USA: `$`, Canada: `CA$`, Europe: `€`, UK: `£`, Australia: `A$` 
+   - Copy `config.sample.json` to `config.json` and adjust the settings as needed.
+   - At a minimum, you **must** modify the `currency` field to match your local marketplace.
+   - Some currency symbols: USA: `$`, Canada: `CA$`, Europe: `€`, UK: `£`, Australia: `A$`
+   - You can optionally change the `database_name`.
 
    Example `config.json`:
 
    ```json
    {
-       "server_ip": "0.0.0.0", // Listen on all IPs or specify an IP address
-       "server_port": "5000", // Port for the RSS server
-       "currency": "$", // Currency used in your local marketplace
-       "refresh_interval_minutes": 15, // Interval for checking new ads (recommened 15 interval minutes)
+       "server_ip": "0.0.0.0",
+       "server_port": 5000,
+       "currency": "$",
+       "refresh_interval_minutes": 15,
        "log_filename": "fb-rssfeed.log",
+       "database_name": "fb-rss-feed.db",
        "url_filters": {
-           "https://www.facebook.com/marketplace/page1": {
+           "https://www.facebook.com/marketplace/category/search?query=smart%20tv&exact=false": {
                "level1": ["tv"],
                "level2": ["smart"],
                "level3": ["55\"", "55 inch"]
            },
-           "https://www.facebook.com/marketplace/page2": {
+           "https://www.facebook.com/marketplace/category/search?query=dishwasher&exact=false": {
                "level1": ["dishwasher"],
                "level2": ["kitchenaid", "samsung"]
            },
-           "https://www.facebook.com/marketplace/page2": {}
+           "https://www.facebook.com/marketplace/category/search?query=free%20stuff&exact=false": {}
        }
    }
    ```
@@ -89,13 +91,9 @@ Note: the code has been tested with `Python3` on `Linux` and `Windows 10`.
 
 ## Running the Application
 
-1. **Initialize the Database:**
+1. **Run the Server:**
 
-   ```bash
-   python init_db.py
-   ```
-
-2. **Run the Server:**
+   The database (`fb-rss-feed.db` by default, or the name specified in `config.json`) will be created and initialized automatically the first time you run the server if it doesn't exist.
 
    ```bash
    python fb_ad_monitor.py
@@ -105,9 +103,9 @@ Note: the code has been tested with `Python3` on `Linux` and `Windows 10`.
 
 - **Feed URL:** `http://server_ip:server_port/rss`
 
-   Replace `server_ip` and `server_port` with your configured values.
+   Replace `server_ip` and `server_port` with your configured values (e.g., `http://localhost:5000/rss`).
 
-- **Feed Updates:** New ads are added to the feed only if they haven't been seen in the past week.
+- **Feed Updates:** The RSS feed displays ads that have been recently found or checked (typically within the last 7 days, based on database records). New ads matching your filters are added to the database and will appear in the feed shortly after being detected.
 
 - **RSS Reader:** Use any RSS feed reader to monitor updates. For example, you can use [Feedbro](https://nodetics.com/feedbro/).
 
@@ -125,4 +123,11 @@ docker run --name fb-mp-rss -d \
   regek/fb-mp-rss:latest
 ```
 
-
+### How to run with Docker Compose
+- Ensure you have `docker-compose.yml` in your project directory.
+- Create your `config.json` file in the same directory.
+- Run:
+ ```bash
+ docker-compose up -d
+ ```
+- The service will be available at `http://localhost:5000/rss`.
