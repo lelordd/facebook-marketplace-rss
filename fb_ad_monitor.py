@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
+import waitress
 
 import PyRSS2Gen
 import tzlocal
