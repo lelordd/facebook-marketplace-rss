@@ -27,67 +27,95 @@ Note: the code has been tested with `Python3` on `Linux` and `Windows 10`.
 
 ## Configuration
 
-1. **Modify or Create `config.json`:**
+You can configure the application by directly editing the `config.json` file or by using the web-based configuration editor. The web editor is generally recommended for ease of use and to ensure the configuration is correctly formatted.
 
-   - Copy `config.sample.json` to `config.json` and adjust the settings as needed.
-   - At a minimum, you **must** modify the `currency` field to match your local marketplace.
-   - Some currency symbols: USA: `$`, Canada: `CA$`, Europe: `€`, UK: `£`, Australia: `A$`
-   - You can optionally change the `database_name`.
+### 1. Editing Configuration via Web UI (Recommended)
 
-   Example `config.json`:
+After starting the application (see "Running the Application" section), you can access a web interface to edit its configuration.
 
-   ```json
-   {
-       "server_ip": "0.0.0.0",
-       "server_port": 5000,
-       "currency": "$",
-       "refresh_interval_minutes": 15,
-       "log_filename": "fb-rssfeed.log",
-       "database_name": "fb-rss-feed.db",
-       "url_filters": {
-           "https://www.facebook.com/marketplace/category/search?query=smart%20tv&exact=false": {
-               "level1": ["tv"],
-               "level2": ["smart"],
-               "level3": ["55\"", "55 inch"]
-           },
-           "https://www.facebook.com/marketplace/category/search?query=dishwasher&exact=false": {
-               "level1": ["dishwasher"],
-               "level2": ["kitchenaid", "samsung"]
-           },
-           "https://www.facebook.com/marketplace/category/search?query=free%20stuff&exact=false": {}
-       }
-   }
-   ```
+-   **Access URL:** `http://<server_ip>:<server_port>/edit-config`
+    (Replace `<server_ip>` and `<server_port>` with the values from your `config.json`, e.g., `http://localhost:5000/edit-config` if using default server settings).
+-   **Functionality:** This interface allows you to modify all settings that are typically found in `config.json`, including:
+    -   Server IP and Port
+    -   Currency Symbol
+    -   Refresh Interval (choose from presets or set a custom value)
+    -   URL Filters:
+        -   Add new Facebook Marketplace search URLs to monitor.
+        -   Define multi-level keyword filters for each URL (keywords within a level are OR'd, keywords between levels are AND'd).
+        -   Remove existing URL filters or keyword levels.
+-   **Saving Changes:** When you save the configuration through the UI:
+    -   The `config.json` file on the server is automatically updated with your changes.
+    -   A backup of the previous `config.json` is created (e.g., `config.json.bak`) in the same directory.
+    -   The application reloads the new configuration and restarts its monitoring tasks with the new settings. This means any changes to refresh intervals or filters take effect immediately without needing to manually restart the server.
 
-2. **Configuring URL Filters:**
+### 2. Manually Modifying `config.json`
 
-   - **Browse Facebook Marketplace:** Perform a search with your desired keywords.
-   - **Set Filters:** Apply search filters like sort order, price range, condition, etc.
-   - **Copy URL:** Use the entire URL after setting the filters.
+If you prefer to edit the configuration file directly, or if you need to set up the initial `config.json` before running the server for the first time:
 
-   The search function on Facebook Marketplace is incredibly frustrating. It often returns irrelevant results, even when you're searching for something specific. For instance, when you set the filter to "Date listed: Newest First," you might end up with spammy listings rather than relevant items. To improve the chances of finding what you're looking for, make sure to use the search filters.
+1.  **Locate or Create `config.json`:**
+    -   Copy [`config.sample.json`](config.sample.json:1) to `config.json` in the project's root directory.
+    -   Adjust the settings as needed.
+    -   At a minimum, you **must** modify the `currency` field to match your local marketplace.
+    -   Some currency symbols: USA: `$`, Canada: `CA$`, Europe: `€`, UK: `£`, Australia: `A$`
+    -   You can optionally change other settings like `database_name`, `log_filename`, `server_ip`, and `server_port`.
 
+    Example `config.json`:
 
-   - **Define Search Terms:** For each URL, specify search terms in levels.  
-     Keywords within a level are `OR` operations, and keywords between levels are `AND` operations.  
-     Only ad `title` is searched  
+    ```json
+    {
+        "server_ip": "0.0.0.0",
+        "server_port": 5000,
+        "currency": "$",
+        "refresh_interval_minutes": 15,
+        "log_filename": "fb-rssfeed.log",
+        "database_name": "fb-rss-feed.db",
+        "url_filters": {
+            "https://www.facebook.com/marketplace/category/search?query=smart%20tv&exact=false": {
+                "level1": ["tv"],
+                "level2": ["smart"],
+                "level3": ["55\"", "55 inch"]
+            },
+            "https://www.facebook.com/marketplace/category/search?query=dishwasher&exact=false": {
+                "level1": ["dishwasher"],
+                "level2": ["kitchenaid", "samsung"]
+            },
+            "https://www.facebook.com/marketplace/category/search?query=free%20stuff&exact=false": {}
+        }
+    }
+    ```
 
-     Example:
-     - **URL 1:** `https://www.facebook.com/marketplace/page1`
-       - **level1:** ["tv"]
-       - **level2:** ["smart"]
-       - **level3:** ["55\"", "55 inch"]
+2.  **Configuring URL Filters (Manual Method):**
+    This section details how to structure the `url_filters` in `config.json` if editing manually. The web UI provides a more interactive way to manage these.
 
-     This configuration will match titles containing "tv" and "smart" and either "55\"" or "55 inch". e.g., TCL 55" smart tv, smart tv 55 inch LG
+    -   **Browse Facebook Marketplace:** Perform a search with your desired keywords.
+    -   **Set Filters:** Apply search filters like sort order, price range, condition, etc.
+    -   **Copy URL:** Use the entire URL after setting the filters. This URL will be a key in the `url_filters` object.
 
-     - **URL 2:** `https://www.facebook.com/marketplace/page2`
-       - **level1:** ["dishwasher"]
-       - **level2:** ["kitchenaid", "samsung"]
+    The search function on Facebook Marketplace can be frustrating. It often returns irrelevant results. Using specific search filters on Facebook Marketplace before copying the URL is highly recommended.
 
-     This will match titles containing "dishwasher" and either "kitchenaid" or "samsung". e.g., samsung dishwasher xyz, slightly used kicthenaid dishwasher
+    -   **Define Search Terms:** For each URL, specify search terms in levels (e.g., `level1`, `level2`).
+        Keywords within a single level (e.g., multiple items in `level1`) are treated as `OR` operations.
+        Keywords between different levels (e.g., `level1` AND `level2`) are treated as `AND` operations.
+        Only the ad `title` is searched by these keyword filters.
+        If a URL has an empty object `{}` as its filter, all items from that URL will be included without keyword filtering.
 
-     No custom filtering
-     - **URL 3:** `https://www.facebook.com/marketplace/page2`
+        Example:
+        -   **URL 1:** `https://www.facebook.com/marketplace/some_query_for_tvs`
+            ```json
+            "level1": ["tv"],
+            "level2": ["smart"],
+            "level3": ["55\"", "55 inch"]
+            ```
+          This configuration will match titles containing "tv" AND "smart" AND (either "55\"" OR "55 inch").
+          e.g., "TCL 55\" smart tv", "smart tv 55 inch LG"
+
+        -   **URL 2:** `https://www.facebook.com/marketplace/some_query_for_dishwashers`
+            ```json
+            "level1": ["dishwasher"],
+            "level2": ["kitchenaid", "samsung"]
+            ```
+          This will match titles containing "dishwasher" AND (either "kitchenaid" OR "samsung").
+          e.g., "samsung dishwasher xyz", "slightly used kitchenaid dishwasher"
 
 ## Running the Application
 
@@ -99,15 +127,20 @@ Note: the code has been tested with `Python3` on `Linux` and `Windows 10`.
    python fb_ad_monitor.py
    ```
 
-## Accessing the RSS Feed
+## Accessing the Application via Web Browser
 
-- **Feed URL:** `http://server_ip:server_port/rss`
+Once the server is running (see "Running the Application"), you can access the following endpoints using your web browser:
 
-   Replace `server_ip` and `server_port` with your configured values (e.g., `http://localhost:5000/rss`).
+-   **RSS Feed URL:** `http://<server_ip>:<server_port>/rss`
+    -   This is the main RSS feed generated from your Facebook Marketplace searches and filters.
+    -   Replace `<server_ip>` and `<server_port>` with the values configured in your `config.json` (e.g., `http://localhost:5000/rss` if using default server settings).
+    -   The feed displays ads recently found or checked (typically within the last 7 days, based on database records). New ads matching your filters are added to the database and will appear in the feed shortly after detection.
+    -   Use any RSS feed reader to monitor updates. For example, [Feedbro](https://nodetics.com/feedbro/).
 
-- **Feed Updates:** The RSS feed displays ads that have been recently found or checked (typically within the last 7 days, based on database records). New ads matching your filters are added to the database and will appear in the feed shortly after being detected.
-
-- **RSS Reader:** Use any RSS feed reader to monitor updates. For example, you can use [Feedbro](https://nodetics.com/feedbro/).
+-   **Configuration Editor URL:** `http://<server_ip>:<server_port>/edit-config`
+    -   This web page allows you to view and modify the application's configuration (`config.json`) directly in your browser.
+    -   Changes made here are saved to `config.json`, and the application automatically reloads the new settings.
+    -   Refer to the "Configuration" section (specifically "Editing Configuration via Web UI") for detailed information on using this editor.
 
 ## Set log level (optional)
 - set log level `export LOG_LEVEL=ERROR`
