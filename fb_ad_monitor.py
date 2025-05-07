@@ -14,17 +14,19 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
-from threading import Lock
+from threading import Lock, RLock
 from typing import Any, Dict, List, Optional, Tuple
 import waitress
+import shutil # For config backup
+from urllib.parse import urlparse # For URL validation
 
 import PyRSS2Gen
 import tzlocal
-from apscheduler.jobstores.base import ConflictingIdError
+from apscheduler.jobstores.base import ConflictingIdError, JobLookupError
 from apscheduler.schedulers.background import BackgroundScheduler
 from bs4 import BeautifulSoup
 from dateutil import parser
-from flask import Flask, Response
+from flask import Flask, Response, jsonify, request, render_template, send_from_directory
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.common.by import By
@@ -58,6 +60,9 @@ class fbRssAdMonitor:
         Args:
             json_file (str): Path to the configuration JSON file.
         """
+        self.config_file_path: str = json_file # Store path to config file
+        self.config_lock: RLock = RLock() # Lock for config file operations
+
         self.urls_to_monitor: List[str] = []
         self.url_filters: Dict[str, Dict[str, List[str]]] = {}
         self.database: str = DEFAULT_DB_NAME
@@ -70,12 +75,15 @@ class fbRssAdMonitor:
         self.driver: Optional[webdriver.Firefox] = None
         self.logger: logging.Logger = logging.getLogger(__name__) # Placeholder, setup in set_logger
         self.scheduler: Optional[BackgroundScheduler] = None
-        self.job_lock: Lock = Lock()
+        self.job_lock: Lock = Lock() # Lock for the ad checking job
 
-        self.load_from_json(json_file) # Load config which might overwrite defaults
+        self.load_from_json(self.config_file_path) # Load config which might overwrite defaults
         self.set_logger() # Setup logger after potentially getting log filename from config
-        self.app: Flask = Flask(__name__)
-        self.app.add_url_rule('/rss', 'rss', self.rss)
+
+        # Initialize Flask app
+        self.app: Flask = Flask(__name__, template_folder='templates', static_folder='static')
+        self._setup_routes()
+
         self.rss_feed: PyRSS2Gen.RSS2 = PyRSS2Gen.RSS2(
             title="Facebook Marketplace Ad Feed",
             link=f"http://{self.server_ip}:{self.server_port}/rss", # Use configured IP/Port
@@ -207,30 +215,39 @@ class fbRssAdMonitor:
              return
 
         self.logger.info(f"Setting up scheduler to run every {self.refresh_interval_minutes} minutes.")
-        self.scheduler = BackgroundScheduler(timezone=str(self.local_tz)) # Use local timezone
         job_id = 'check_ads_job' # Use a fixed ID
+
+        if self.scheduler is None:
+            self.scheduler = BackgroundScheduler(timezone=str(self.local_tz))
+
         try:
+            # Remove existing job if it exists, before adding/rescheduling
+            try:
+                self.scheduler.remove_job(job_id)
+                self.logger.info(f"Removed existing job '{job_id}' before rescheduling.")
+            except JobLookupError:
+                self.logger.debug(f"Job '{job_id}' not found, no need to remove before adding.")
+
             self.scheduler.add_job(
                 self.check_for_new_ads,
                 'interval',
                 id=job_id,
                 minutes=self.refresh_interval_minutes,
-                misfire_grace_time=60, # Increased grace time
+                misfire_grace_time=60,
                 coalesce=True,
                 next_run_time=datetime.now(self.local_tz) + timedelta(seconds=5) # Start soon
             )
-            self.scheduler.start()
-            self.logger.info(f"Scheduler started with job '{job_id}'.")
-        except ConflictingIdError:
-            self.logger.warning(f"Job '{job_id}' already exists. Attempting to resume scheduler.")
-            # If scheduler wasn't running but job exists, try starting it
             if not self.scheduler.running:
-                 try:
-                      self.scheduler.start(paused=False)
-                      self.logger.info("Scheduler resumed.")
-                 except Exception as e:
-                      self.logger.error(f"Failed to resume scheduler: {e}")
+                self.scheduler.start()
+            self.logger.info(f"Scheduler configured with job '{job_id}' to run every {self.refresh_interval_minutes} minutes.")
 
+        except ConflictingIdError:
+            # This case should ideally be handled by remove_job now, but as a fallback:
+            self.logger.warning(f"Job '{job_id}' conflict. Attempting to reschedule.")
+            self.scheduler.reschedule_job(job_id, trigger='interval', minutes=self.refresh_interval_minutes)
+            if not self.scheduler.running:
+                self.scheduler.start(paused=False) # Resume if paused
+            self.logger.info(f"Scheduler resumed/rescheduled job '{job_id}'.")
         except Exception as e:
              self.logger.error(f"Failed to setup or start scheduler: {e}")
 
@@ -747,6 +764,254 @@ class fbRssAdMonitor:
              self.logger.exception(f"Error converting RSS feed to XML: {e}")
              return Response("Error generating RSS feed.", status=500, mimetype='text/plain')
 
+    # --- Configuration Management Routes ---
+    def _setup_routes(self) -> None:
+        """Sets up Flask routes."""
+        self.app.add_url_rule('/rss', 'rss', self.rss)
+        self.app.add_url_rule('/edit', 'edit_config_page', self.edit_config_page, methods=['GET'])
+        self.app.add_url_rule('/api/config', 'get_config_api', self.get_config_api, methods=['GET'])
+        self.app.add_url_rule('/api/config', 'update_config_api', self.update_config_api, methods=['POST'])
+        # Flask serves static files from 'static_folder' automatically at '/static/...'
+        # So an explicit rule for /static/js/edit_config.js is not strictly needed if static_folder is set.
+
+    def edit_config_page(self) -> Any:
+        """Serves the HTML page for editing configuration."""
+        try:
+            return render_template('edit_config.html')
+        except Exception as e:
+            self.logger.error(f"Error rendering edit_config.html: {e}")
+            return "Error loading configuration page.", 500
+
+
+    def get_config_api(self) -> Response:
+        """API endpoint to get the current configuration."""
+        with self.config_lock:
+            try:
+                with open(self.config_file_path, 'r', encoding='utf-8') as f:
+                    current_config = json.load(f)
+                return jsonify(current_config)
+            except FileNotFoundError:
+                self.logger.error(f"Config file {self.config_file_path} not found for API.")
+                return jsonify({"detail": "Configuration file not found."}), 404
+            except json.JSONDecodeError:
+                self.logger.error(f"Error decoding config file {self.config_file_path} for API.")
+                return jsonify({"detail": "Error reading configuration file."}), 500
+            except Exception as e:
+                self.logger.exception(f"Unexpected error in get_config_api: {e}")
+                return jsonify({"detail": "Internal server error."}), 500
+
+
+    def _validate_config_data(self, data: Dict[str, Any]) -> Tuple[bool, str]:
+        """Validates the structure and types of the configuration data."""
+        required_keys = {
+            "server_ip": str,
+            "server_port": int,
+            "currency": str,
+            "refresh_interval_minutes": int,
+            "url_filters": dict
+            # log_filename and database_name are also in config but not strictly validated here for dynamic updates
+        }
+        for key, expected_type in required_keys.items():
+            if key not in data:
+                return False, f"Missing required key: {key}"
+            if not isinstance(data[key], expected_type):
+                return False, f"Invalid type for {key}. Expected {expected_type.__name__}, got {type(data[key]).__name__}"
+
+        if not (0 < data["server_port"] < 65536):
+            return False, "Server port must be between 1 and 65535."
+        if data["refresh_interval_minutes"] <= 0:
+            return False, "Refresh interval must be a positive integer."
+
+        for url, filters in data["url_filters"].items():
+            try:
+                parsed_url = urlparse(url)
+                if not all([parsed_url.scheme, parsed_url.netloc]):
+                    return False, f"Invalid URL format: {url}"
+                # Optional: more specific facebook marketplace URL check
+                # if not "facebook.com/marketplace" in url.lower():
+                #     return False, f"URL does not appear to be a Facebook Marketplace URL: {url}"
+            except ValueError:
+                return False, f"Invalid URL format: {url}"
+            if not isinstance(filters, dict):
+                return False, f"Filters for URL '{url}' must be a dictionary."
+            for level_name, keywords in filters.items():
+                if not level_name.startswith("level") or not level_name[5:].isdigit():
+                    return False, f"Invalid filter level name '{level_name}' for URL '{url}'."
+                if not isinstance(keywords, list):
+                    return False, f"Keywords for '{level_name}' in URL '{url}' must be a list."
+                if not all(isinstance(kw, str) for kw in keywords):
+                    return False, f"All keywords for '{level_name}' in URL '{url}' must be strings."
+        return True, ""
+
+    def _write_config(self, data: Dict[str, Any]) -> None:
+        """Writes the given data to the configuration file."""
+        with open(self.config_file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4)
+        self.logger.info(f"Configuration successfully written to {self.config_file_path}")
+
+
+    def _reload_config_dynamically(self, new_config: Dict[str, Any]) -> Tuple[bool, str]:
+        """
+        Attempts to apply new configuration settings dynamically.
+        Returns (success_status, message).
+        """
+        self.logger.info("Attempting to reload configuration dynamically...")
+        applied_changes = []
+        warnings = []
+
+        # Update currency (used in extract_ad_details)
+        if self.currency != new_config.get("currency"):
+            self.currency = new_config.get("currency", self.currency)
+            applied_changes.append("Currency")
+
+        # Update URL filters
+        if self.url_filters != new_config.get("url_filters"):
+            self.url_filters = new_config.get("url_filters", self.url_filters)
+            self.urls_to_monitor = list(self.url_filters.keys())
+            applied_changes.append("URL filters")
+            if not self.urls_to_monitor:
+                self.logger.warning("No URLs to monitor after config update.")
+                warnings.append("URL monitoring is now inactive as no URLs are specified.")
+
+
+        # Update refresh interval and reschedule job
+        new_interval = new_config.get("refresh_interval_minutes", self.refresh_interval_minutes)
+        if self.refresh_interval_minutes != new_interval:
+            self.refresh_interval_minutes = new_interval
+            if self.scheduler and self.scheduler.running:
+                try:
+                    job_id = 'check_ads_job'
+                    self.scheduler.reschedule_job(job_id, trigger='interval', minutes=self.refresh_interval_minutes)
+                    self.logger.info(f"Rescheduled ad check job to run every {self.refresh_interval_minutes} minutes.")
+                    applied_changes.append("Refresh interval")
+                except Exception as e:
+                    self.logger.error(f"Failed to reschedule job: {e}")
+                    return False, f"Failed to apply new refresh interval: {e}"
+            else:
+                # If scheduler isn't running, setup_scheduler will pick up the new interval when it's next called (e.g. on run)
+                self.setup_scheduler() # This will now use the new self.refresh_interval_minutes
+                applied_changes.append("Refresh interval (scheduler re-initialized)")
+
+
+        # For server_ip and server_port, log that a restart is needed.
+        if self.server_ip != new_config.get("server_ip") or self.server_port != new_config.get("server_port"):
+            self.server_ip = new_config.get("server_ip", self.server_ip) # Update instance var for RSS link
+            self.server_port = new_config.get("server_port", self.server_port)
+            # Update RSS feed link
+            self.rss_feed.link = f"http://{self.server_ip}:{self.server_port}/rss"
+            warnings.append("Server IP or Port changed. A manual restart of the application/Docker container is required for these changes to take full effect on the running server.")
+
+        # log_filename and database_name changes also require a restart.
+        if self.log_filename != new_config.get("log_filename"):
+            warnings.append("Log filename changed. A manual restart is required for this change to take effect.")
+        if self.database != new_config.get("database_name"):
+            warnings.append("Database name changed. A manual restart is required for this change to take effect.")
+
+        if applied_changes:
+            self.logger.info(f"Dynamically applied changes for: {', '.join(applied_changes)}")
+        if warnings:
+            self.logger.warning("Configuration warnings: " + " | ".join(warnings))
+            return True, "Configuration saved. Some changes applied dynamically. " + " | ".join(warnings)
+
+        return True, "Configuration saved and relevant changes applied dynamically."
+
+
+    def update_config_api(self) -> Response:
+        """API endpoint to update the configuration."""
+        with self.config_lock:
+            new_data = request.get_json()
+            if not new_data:
+                return jsonify({"detail": "No data provided or not JSON."}), 400
+
+            is_valid, validation_msg = self._validate_config_data(new_data)
+            if not is_valid:
+                self.logger.error(f"Invalid config data received: {validation_msg}")
+                return jsonify({"detail": f"Invalid configuration data: {validation_msg}"}), 400
+
+            backup_path = self.config_file_path + ".bak"
+            current_config_in_memory = {
+                "server_ip": self.server_ip,
+                "server_port": self.server_port,
+                "currency": self.currency,
+                "refresh_interval_minutes": self.refresh_interval_minutes,
+                "log_filename": self.log_filename,
+                "database_name": self.database,
+                "url_filters": self.url_filters.copy() # Ensure a copy
+            }
+
+            try:
+                # 1. Backup current config file
+                if os.path.exists(self.config_file_path):
+                    shutil.copy2(self.config_file_path, backup_path)
+                    self.logger.info(f"Created backup of config: {backup_path}")
+
+                # 2. Write new config to file
+                self._write_config(new_data)
+
+                # 3. Attempt to apply changes dynamically
+                # First, update the instance's view of what the config *should* be,
+                # then try to apply. load_from_json updates self. variables.
+                self.load_from_json(self.config_file_path) # This updates self.server_ip etc. from the new file
+                
+                # Now, _reload_config_dynamically will use these newly loaded self. variables
+                # to compare and apply.
+                # However, _reload_config_dynamically takes new_config as an argument.
+                # Let's pass the `new_data` directly to _reload_config_dynamically
+                # and it will update the necessary self attributes.
+                
+                # The load_from_json above already updated the instance variables.
+                # _reload_config_dynamically will now effectively re-apply some of these,
+                # like rescheduling. This is okay.
+                
+                # Let's refine: _reload_config_dynamically should update the instance variables itself.
+                # So, we don't call self.load_from_json() here before _reload_config_dynamically.
+                # Instead, _reload_config_dynamically will update self.currency, self.url_filters, etc.
+
+                success, reload_msg = self._reload_config_dynamically(new_data)
+
+                if not success:
+                    raise Exception(f"Failed to apply new configuration dynamically: {reload_msg}")
+
+                # 4. If successful, remove backup
+                if os.path.exists(backup_path):
+                    os.remove(backup_path)
+                self.logger.info("Configuration updated and applied successfully.")
+                return jsonify({"message": reload_msg}), 200
+
+            except Exception as e:
+                self.logger.exception(f"Error updating configuration: {e}. Rolling back.")
+                # Rollback: Restore from backup if it exists
+                if os.path.exists(backup_path):
+                    try:
+                        shutil.move(backup_path, self.config_file_path) # move is atomic
+                        self.logger.info(f"Rolled back configuration from {backup_path}")
+                        # Reload the old (rolled-back) configuration into the application state
+                        self.load_from_json(self.config_file_path)
+                        # Re-apply old settings (e.g., reschedule job with old interval)
+                        # This can be done by calling _reload_config_dynamically with the old config
+                        # or simply re-calling setup_scheduler() which uses current self.refresh_interval_minutes
+                        self.setup_scheduler() # Re-initializes scheduler with current (old) settings
+                        self.logger.info("Re-applied previous configuration settings after rollback.")
+
+                    except Exception as rb_err:
+                        self.logger.error(f"CRITICAL: Failed to rollback configuration file: {rb_err}. Config may be inconsistent.")
+                        return jsonify({"detail": f"Error saving configuration and failed to rollback: {e}. Manual check required."}), 500
+                else:
+                     # If backup didn't exist (e.g. first write failed), try to write original in-memory config back
+                    try:
+                        self._write_config(current_config_in_memory)
+                        self.logger.info("Wrote original in-memory config back after update failure.")
+                        self.load_from_json(self.config_file_path) # Reload this original state
+                        self.setup_scheduler()
+                    except Exception as write_back_err:
+                        self.logger.error(f"CRITICAL: Failed to write original config back: {write_back_err}. Config may be corrupted.")
+                        return jsonify({"detail": f"Error saving configuration, failed to write original back: {e}. Manual check required."}), 500
+
+
+                return jsonify({"detail": f"Error saving configuration: {str(e)}. Configuration has been rolled back to previous state."}), 500
+
+
+    # --- Main Application Logic ---
 
     def run(self, debug_opt: bool = False) -> None:
         """

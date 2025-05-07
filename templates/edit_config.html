@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edit Configuration</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1, h2 { color: #333; }
+        label { display: block; margin-top: 10px; font-weight: bold; }
+        input[type="text"], input[type="number"], select {
+            width: calc(100% - 22px);
+            padding: 10px;
+            margin-top: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 20px;
+            font-size: 16px;
+        }
+        button:hover { background-color: #0056b3; }
+        .url-filter-block {
+            border: 1px solid #ccc;
+            padding: 15px;
+            margin-top: 15px;
+            border-radius: 4px;
+            background-color: #f9f9f9;
+        }
+        .filter-level { margin-left: 20px; margin-top: 5px; }
+        .keyword-input { width: auto; margin-right: 5px; }
+        .remove-btn, .add-btn {
+            background-color: #dc3545;
+            color: white;
+            padding: 5px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: 5px;
+        }
+        .add-btn { background-color: #28a745; }
+        .error-message { color: red; margin-top: 10px; }
+        .success-message { color: green; margin-top: 10px; }
+        #loading-message { display: none; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Edit Configuration</h1>
+        <div id="loading-message">Loading configuration...</div>
+        <div id="error-message-global" class="error-message"></div>
+        <div id="success-message-global" class="success-message"></div>
+
+        <form id="config-form">
+            <h2>Server Settings</h2>
+            <label for="server_ip">Server IP:</label>
+            <input type="text" id="server_ip" name="server_ip">
+
+            <label for="server_port">Server Port:</label>
+            <input type="number" id="server_port" name="server_port">
+
+            <label for="currency">Currency Symbol:</label>
+            <input type="text" id="currency" name="currency">
+
+            <label for="refresh_interval_minutes">Refresh Interval (minutes):</label>
+            <select id="refresh_interval_minutes" name="refresh_interval_minutes">
+                <option value="5">5</option>
+                <option value="10">10</option>
+                <option value="15">15</option>
+                <option value="30">30</option>
+                <option value="60">60</option>
+                <option value="180">180</option>
+                <option value="custom">Custom</option>
+            </select>
+            <input type="number" id="refresh_interval_minutes_custom" name="refresh_interval_minutes_custom" style="display:none;" placeholder="Enter custom interval">
+
+
+            <h2>URL Filters</h2>
+            <div id="url-filters-container">
+                <!-- URL filter blocks will be dynamically added here -->
+            </div>
+            <button type="button" id="add-url-filter-btn" class="add-btn">Add URL Filter</button>
+
+            <hr style="margin-top: 30px; margin-bottom: 20px;">
+            <button type="submit">Save Configuration</button>
+        </form>
+    </div>
+
+    <script src="/static/js/edit_config.js"></script>
+</body>
+</html>
