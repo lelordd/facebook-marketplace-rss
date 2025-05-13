@@ -1,12 +1,13 @@
 #docker-compose up -d
 services:
   fb-mp-rss:
-    image: regek/fb-mp-rss:latest
+    build: . # Build from local Dockerfile
+    # image: regek/fb-mp-rss:latest # Comment out or remove if building locally
     container_name: fb-mp-rss
     restart: always
     environment:
-      CONFIG_FILE: /app/config/config.json
+      CONFIG_FILE: /app/config.json # Path for config file inside the container
     ports:
       - "5000:5000"
     volumes:
-      - ./:/app/config
+      - ./config.json:/app/config.json # Mounts host's ./config.json to /app/config.json in container

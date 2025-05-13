@@ -161,6 +161,7 @@ docker run --name fb-mp-rss -d \
 - Create your `config.json` file in the same directory.
 - Run:
  ```bash
- docker-compose up -d
+ docker-compose up -d --build
  ```
+- The `--build` flag ensures that the image is built from your local `Dockerfile` and includes any local code changes. You can omit `--build` on subsequent runs if no code or `Dockerfile` changes have been made.
 - The service will be available at `http://localhost:5000/rss`.

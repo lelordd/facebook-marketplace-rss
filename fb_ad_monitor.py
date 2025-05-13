@@ -73,12 +73,32 @@ class fbRssAdMonitor:
         self.currency: str = "$" # Default
         self.refresh_interval_minutes: int = 15 # Default
         self.driver: Optional[webdriver.Firefox] = None
-        self.logger: logging.Logger = logging.getLogger(__name__) # Placeholder, setup in set_logger
+        # self.logger: logging.Logger = logging.getLogger(__name__) # Placeholder, setup in set_logger
         self.scheduler: Optional[BackgroundScheduler] = None
         self.job_lock: Lock = Lock() # Lock for the ad checking job
 
-        self.load_from_json(self.config_file_path) # Load config which might overwrite defaults
-        self.set_logger() # Setup logger after potentially getting log filename from config
+        # Initialize logger attribute and perform initial setup
+        self.logger = logging.getLogger(__name__)
+        self.set_logger() # Initial setup with default self.log_filename
+
+        # Load configuration. This may update self.log_filename.
+        # load_from_json can now safely use the initialized self.logger for its own error reporting.
+        try:
+            original_log_filename = self.log_filename
+            self.load_from_json(self.config_file_path)
+
+            # If log_filename was changed by loading config, re-initialize the logger's file handler.
+            if self.log_filename != original_log_filename:
+                self.logger.info(f"Log filename updated from '{original_log_filename}' to '{self.log_filename}'. Re-initializing logger file handler.")
+                self.set_logger() # This will re-setup handlers, including the file handler with the new name.
+        except Exception as e:
+            # Log critical failure and re-raise to prevent app from running in a bad state
+            if self.logger and hasattr(self.logger, 'critical'): # Ensure logger is usable
+                self.logger.critical(f"Fatal error during configuration loading: {e}", exc_info=True)
+            else:
+                # Fallback print if logger itself failed catastrophically
+                print(f"CRITICAL FALLBACK: Fatal error during configuration loading and logger unavailable: {e}")
+            raise # Important to stop execution if config is broken
 
         # Initialize Flask app
         self.app: Flask = Flask(__name__, template_folder='templates', static_folder='static')
@@ -334,12 +354,14 @@ class fbRssAdMonitor:
             bool: True if the title matches all filter levels for the URL, False otherwise.
         """
         filters = self.url_filters.get(url)
-        if not filters:
-            self.logger.debug(f"No filters defined for URL '{url}'. Ad '{title}' passes.")
+        # If filters is None (URL not in url_filters) or an empty dict {} (URL present but no levels/keywords defined),
+        # it means no filtering should be applied for this URL.
+        if not filters: # This covers both None and {}
+            self.logger.debug(f"No specific keyword filters defined for URL '{url}' (filters: {filters}). Ad '{title}' passes.")
             return True # No filters for this URL, so it passes
 
         if not isinstance(filters, dict):
-             self.logger.warning(f"Filters for URL '{url}' are not a dictionary. Skipping filters.")
+             self.logger.warning(f"Filters for URL '{url}' are not a dictionary (type: {type(filters)}). Skipping filters.")
              return True # Invalid filter format, treat as passing
 
         try:
@@ -856,64 +878,88 @@ class fbRssAdMonitor:
         Returns (success_status, message).
         """
         self.logger.info("Attempting to reload configuration dynamically...")
-        applied_changes = []
-        warnings = []
+        applied_dynamically = []
+        requires_restart = [] # Specific items requiring a restart
 
-        # Update currency (used in extract_ad_details)
-        if self.currency != new_config.get("currency"):
-            self.currency = new_config.get("currency", self.currency)
-            applied_changes.append("Currency")
+        # --- Settings that can be applied dynamically ---
+
+        # Update currency
+        new_currency = new_config.get("currency", self.currency)
+        if self.currency != new_currency:
+            self.currency = new_currency
+            applied_dynamically.append("Currency")
 
         # Update URL filters
-        if self.url_filters != new_config.get("url_filters"):
-            self.url_filters = new_config.get("url_filters", self.url_filters)
+        new_url_filters = new_config.get("url_filters", self.url_filters)
+        if self.url_filters != new_url_filters:
+            self.url_filters = new_url_filters
             self.urls_to_monitor = list(self.url_filters.keys())
-            applied_changes.append("URL filters")
+            applied_dynamically.append("URL filters")
             if not self.urls_to_monitor:
-                self.logger.warning("No URLs to monitor after config update.")
-                warnings.append("URL monitoring is now inactive as no URLs are specified.")
-
+                self.logger.warning("No URLs to monitor after config update. Monitoring will be inactive.")
+                # This isn't a restart warning, but a state warning.
+                # We can add a separate list for general operational warnings if needed.
 
         # Update refresh interval and reschedule job
         new_interval = new_config.get("refresh_interval_minutes", self.refresh_interval_minutes)
         if self.refresh_interval_minutes != new_interval:
+            old_interval = self.refresh_interval_minutes
             self.refresh_interval_minutes = new_interval
             if self.scheduler and self.scheduler.running:
                 try:
                     job_id = 'check_ads_job'
                     self.scheduler.reschedule_job(job_id, trigger='interval', minutes=self.refresh_interval_minutes)
-                    self.logger.info(f"Rescheduled ad check job to run every {self.refresh_interval_minutes} minutes.")
-                    applied_changes.append("Refresh interval")
+                    self.logger.info(f"Rescheduled ad check job from {old_interval} to {self.refresh_interval_minutes} minutes.")
+                    applied_dynamically.append("Refresh interval")
                 except Exception as e:
-                    self.logger.error(f"Failed to reschedule job: {e}")
-                    return False, f"Failed to apply new refresh interval: {e}"
+                    self.logger.error(f"Failed to reschedule job for new interval {self.refresh_interval_minutes}: {e}")
+                    # Revert interval change if reschedule fails, to maintain consistency
+                    self.refresh_interval_minutes = old_interval
+                    return False, f"Failed to apply new refresh interval ({new_interval} min): Scheduler error. Interval reverted to {old_interval} min."
             else:
-                # If scheduler isn't running, setup_scheduler will pick up the new interval when it's next called (e.g. on run)
+                # If scheduler isn't running, setup_scheduler will pick up the new interval when it's next called
                 self.setup_scheduler() # This will now use the new self.refresh_interval_minutes
-                applied_changes.append("Refresh interval (scheduler re-initialized)")
+                applied_dynamically.append("Refresh interval (scheduler re-initialized/will use on next start)")
 
+        # --- Settings that require a restart ---
 
-        # For server_ip and server_port, log that a restart is needed.
-        if self.server_ip != new_config.get("server_ip") or self.server_port != new_config.get("server_port"):
-            self.server_ip = new_config.get("server_ip", self.server_ip) # Update instance var for RSS link
-            self.server_port = new_config.get("server_port", self.server_port)
-            # Update RSS feed link
+        # Server IP and Port
+        new_server_ip = new_config.get("server_ip", self.server_ip)
+        new_server_port = new_config.get("server_port", self.server_port)
+        if self.server_ip != new_server_ip or self.server_port != new_server_port:
+            # Update instance vars for things like RSS feed link, but actual server binding needs restart
+            self.server_ip = new_server_ip
+            self.server_port = new_server_port
             self.rss_feed.link = f"http://{self.server_ip}:{self.server_port}/rss"
-            warnings.append("Server IP or Port changed. A manual restart of the application/Docker container is required for these changes to take full effect on the running server.")
+            requires_restart.append("Server IP/Port")
 
-        # log_filename and database_name changes also require a restart.
-        if self.log_filename != new_config.get("log_filename"):
-            warnings.append("Log filename changed. A manual restart is required for this change to take effect.")
-        if self.database != new_config.get("database_name"):
-            warnings.append("Database name changed. A manual restart is required for this change to take effect.")
+        # Log Filename
+        new_log_filename = new_config.get("log_filename", self.log_filename)
+        if self.log_filename != new_log_filename:
+            # self.log_filename = new_log_filename # Actual change requires logger re-init, so restart
+            requires_restart.append("Log filename")
 
-        if applied_changes:
-            self.logger.info(f"Dynamically applied changes for: {', '.join(applied_changes)}")
-        if warnings:
-            self.logger.warning("Configuration warnings: " + " | ".join(warnings))
-            return True, "Configuration saved. Some changes applied dynamically. " + " | ".join(warnings)
+        # Database Name
+        new_database_name = new_config.get("database_name", self.database)
+        if self.database != new_database_name:
+            # self.database = new_database_name # Actual change requires DB re-init, so restart
+            requires_restart.append("Database name")
 
-        return True, "Configuration saved and relevant changes applied dynamically."
+        # --- Construct message ---
+        message_parts = []
+        if applied_dynamically:
+            self.logger.info(f"Dynamically applied changes for: {', '.join(applied_dynamically)}")
+            message_parts.append(f"Dynamically applied: {', '.join(applied_dynamically)}.")
+
+        if requires_restart:
+            self.logger.warning(f"Changes requiring restart: {', '.join(requires_restart)}")
+            message_parts.append(f"Manual restart required for: {', '.join(requires_restart)}.")
+
+        if not message_parts:
+            return True, "Configuration saved. No effective changes made or all changes require a restart and were noted."
+        
+        final_message = "Configuration saved. " + " ".join(message_parts)
+        return True, final_message.strip()
 
 
     def update_config_api(self) -> Response:
@@ -946,12 +992,28 @@ class fbRssAdMonitor:
                     self.logger.info(f"Created backup of config: {backup_path}")
 
                 # 2. Write new config to file
+                self.logger.info(f"DEBUG: Data to be written to config by _write_config: {json.dumps(new_data)}")
                 self._write_config(new_data)
+                try:
+                    with open(self.config_file_path, 'r', encoding='utf-8') as f_check:
+                        written_data_check = json.load(f_check)
+                    self.logger.info(f"DEBUG: Data read back from config immediately after _write_config: {json.dumps(written_data_check)}")
+                    if new_data != written_data_check:
+                        self.logger.warning("DEBUG: Data in file does NOT match data intended to be written!")
+                except Exception as read_check_err:
+                    self.logger.error(f"DEBUG: Error reading back config for check: {read_check_err}")
 
                 # 3. Attempt to apply changes dynamically
+                # _reload_config_dynamically is responsible for updating the instance variables
+                # from new_data and applying any dynamic changes (e.g., rescheduling jobs).
+                # We should not call self.load_from_json() here, as that would pre-emptively
+                # update the instance variables, causing _reload_config_dynamically to see
+                # no difference between its current state and new_data for many fields.
+                
+                # The comments below were part of the thought process leading to this correction.
                 # First, update the instance's view of what the config *should* be,
                 # then try to apply. load_from_json updates self. variables.
-                self.load_from_json(self.config_file_path) # This updates self.server_ip etc. from the new file
+                # self.load_from_json(self.config_file_path) # This updates self.server_ip etc. from the new file
                 
                 # Now, _reload_config_dynamically will use these newly loaded self. variables
                 # to compare and apply.

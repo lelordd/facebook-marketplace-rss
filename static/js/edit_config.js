@@ -12,14 +12,39 @@ document.addEventListener('DOMContentLoaded', () => {
     const successMessageGlobal = document.getElementById('success-message-global');
 
     let currentConfig = {};
+    let initialUrlFilterKeys = new Set(); // To track URLs before a save
 
-    function displayMessage(element, message, isError = true) {
-        element.textContent = message;
-        element.style.display = 'block';
-        element.className = isError ? 'error-message' : 'success-message';
+    /**
+     * Displays a message to the user.
+     * @param {HTMLElement} globalMsgElement - The global message element at the top.
+     * @param {string} message - The message text.
+     * @param {boolean} isError - True if it's an error message, false for success.
+     * @param {HTMLElement|null} [contextualElement=null] - Optional. If provided, message is inserted before this element.
+     */
+    function displayMessage(globalMsgElement, message, isError = true, contextualElement = null) {
+        let msgElement;
+        if (contextualElement) {
+            // Create a new message element for contextual display
+            msgElement = document.createElement('div');
+            msgElement.textContent = message;
+            contextualElement.parentNode.insertBefore(msgElement, contextualElement);
+        } else {
+            // Use the global message element
+            msgElement = globalMsgElement;
+            msgElement.textContent = message;
+        }
+
+        msgElement.style.display = 'block';
+        msgElement.className = isError ? 'error-message' : 'success-message'; // Ensure class is set
+
+        // Auto-hide
         setTimeout(() => {
-            element.style.display = 'none';
-            element.textContent = '';
+            msgElement.style.display = 'none';
+            if (contextualElement) {
+                msgElement.remove(); // Remove dynamically created contextual messages
+            } else {
+                msgElement.textContent = ''; // Clear global message
+            }
         }, 5000);
     }
 
@@ -35,6 +60,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             currentConfig = await response.json();
             populateForm(currentConfig);
+            initialUrlFilterKeys = new Set(Object.keys(currentConfig.url_filters || {})); // Initialize keys
         } catch (error) {
             console.error('Error fetching config:', error);
             displayMessage(errorMessageGlobal, `Error loading configuration: ${error.message}`);
@@ -88,11 +114,11 @@ document.addEventListener('DOMContentLoaded', () => {
         return keywordInput;
     }
 
-    function createRemoveButton(onClick) {
+    function createRemoveButton(label, onClick) { // Added label parameter
         const removeBtn = document.createElement('button');
         removeBtn.type = 'button';
         removeBtn.className = 'remove-btn';
-        removeBtn.textContent = 'Remove';
+        removeBtn.textContent = label; // Use provided label
         removeBtn.addEventListener('click', onClick);
         return removeBtn;
     }
@@ -132,7 +158,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const keywordInput = createKeywordInput(keyword, actualLevelIndex, filterIndex, keywordIndex);
             keywordWrapper.appendChild(keywordInput);
             if (keywords.length > 1 || keywordIndex > 0) { // Show remove button if more than one or not the first
-                 keywordWrapper.appendChild(createRemoveButton(() => {
+                 keywordWrapper.appendChild(createRemoveButton('Remove Keyword', () => { // Updated label
                     keywordWrapper.remove();
                     // Renumber levels if a level is removed (cascading) is handled by re-reading the form
                 }));
@@ -147,24 +173,41 @@ document.addEventListener('DOMContentLoaded', () => {
             const newKeywordIndex = keywordsContainer.querySelectorAll('.keyword-input').length;
             const newKeywordInput = createKeywordInput('', actualLevelIndex, filterIndex, newKeywordIndex);
             keywordWrapper.appendChild(newKeywordInput);
-            keywordWrapper.appendChild(createRemoveButton(() => keywordWrapper.remove()));
+            keywordWrapper.appendChild(createRemoveButton('Remove Keyword', () => keywordWrapper.remove())); // Updated label
             keywordsContainer.appendChild(keywordWrapper);
             newKeywordInput.focus();
         }));
 
-        levelDiv.appendChild(createRemoveButton(() => {
-            levelDiv.remove();
-            // After removing a level, re-number the subsequent levels for this URL filter
+        levelDiv.appendChild(createRemoveButton('Remove Level', () => { // Updated label
             const parentFilterBlock = filterBlock.querySelector('.filter-levels-container');
-            const remainingLevels = parentFilterBlock.querySelectorAll('.filter-level-block');
-            remainingLevels.forEach((remLevel, idx) => {
-                const newLevelNum = idx + 1;
-                remLevel.dataset.levelIndex = newLevelNum;
-                remLevel.querySelector('label').textContent = `Level ${newLevelNum} Keywords:`;
-                remLevel.querySelectorAll('.keyword-input').forEach(kwInput => kwInput.dataset.levelIndex = newLevelNum);
-                const addKwBtn = remLevel.querySelector('.add-btn');
-                if(addKwBtn) addKwBtn.textContent = 'Add Keyword to Level ' + newLevelNum;
-            });
+            const isLevel1 = levelDiv.dataset.levelIndex === '1';
+            const totalLevelsInBlock = parentFilterBlock.querySelectorAll('.filter-level-block').length;
+
+            if (isLevel1 && totalLevelsInBlock === 1) {
+                // Special case: If it's Level 1 and the only level, clear its keywords but keep one empty input.
+                const currentKeywordsContainer = levelDiv.querySelector('.keywords-container');
+                currentKeywordsContainer.innerHTML = ''; // Clear all existing keyword wrappers
+
+                const keywordWrapper = document.createElement('div');
+                keywordWrapper.className = 'keyword-wrapper';
+                const newKeywordInput = createKeywordInput('', 1, filterIndex, 0); // Level 1, filterIndex, keywordIndex 0
+                keywordWrapper.appendChild(newKeywordInput);
+                // No "Remove Keyword" button for the single remaining input in this case
+                currentKeywordsContainer.appendChild(keywordWrapper);
+                newKeywordInput.focus();
+            } else {
+                // Default behavior: remove the level and re-number subsequent ones
+                levelDiv.remove();
+                const remainingLevels = parentFilterBlock.querySelectorAll('.filter-level-block');
+                remainingLevels.forEach((remLevel, idx) => {
+                    const newLevelNum = idx + 1;
+                    remLevel.dataset.levelIndex = newLevelNum;
+                    remLevel.querySelector('label').textContent = `Level ${newLevelNum} Keywords:`;
+                    remLevel.querySelectorAll('.keyword-input').forEach(kwInput => kwInput.dataset.levelIndex = newLevelNum);
+                    const addKwBtn = remLevel.querySelector('.add-btn');
+                    if(addKwBtn) addKwBtn.textContent = 'Add Keyword to Level ' + newLevelNum;
+                });
+            }
         }));
         filterBlock.querySelector('.filter-levels-container').appendChild(levelDiv);
     }
@@ -212,12 +255,12 @@ document.addEventListener('DOMContentLoaded', () => {
             addFilterLevelBlock(block, `level${existingLevels + 1}`, [], filterIndex, existingLevels + 1);
         }));
 
-        block.appendChild(createRemoveButton(() => {
+        block.appendChild(createRemoveButton('Remove Filter URL', () => { // Updated label
             block.remove();
             // Re-index subsequent filter blocks if needed (though not strictly necessary for data collection)
             Array.from(urlFiltersContainer.children).forEach((child, idx) => {
                 child.dataset.filterIndex = idx;
-                // Update indices within the child if necessary
+                // Update indices within the child if necessary (e.g., if filterIndex was used deeply)
             });
         }));
 
@@ -302,20 +345,23 @@ document.addEventListener('DOMContentLoaded', () => {
                         levelHasKeywords = true;
                     }
                 });
-                if (!levelHasKeywords && Object.keys(formData.url_filters[url]).length > 0) {
-                    // If a level has no keywords, but the URL filter itself is not empty,
-                    // it might be an issue depending on backend logic.
-                    // For now, we allow empty levels if the user explicitly creates them.
-                    // If an entire level is empty, we can choose to not send it.
-                    if(formData.url_filters[url][levelName].length === 0){
-                        delete formData.url_filters[url][levelName];
-                    }
-                }
+                // If a level has no keywords, we can choose to not send it or send an empty list.
+                // For consistency and to allow "empty level" as a concept if ever needed,
+                // we'll keep the level if it was explicitly added, even if empty.
+                // However, if a level has no keywords, it effectively means "no filter for this level".
+                // The backend's apply_filters should handle empty keyword lists for a level.
+                // Let's remove the deletion of empty levels for now, to ensure the level structure is preserved if intended.
+                // if(formData.url_filters[url][levelName].length === 0){
+                //     delete formData.url_filters[url][levelName];
+                // }
             });
-            // If a URL filter ends up with no levels, remove it
-            if (Object.keys(formData.url_filters[url]).length === 0) {
-                delete formData.url_filters[url];
-            }
+            // If a URL filter has a URL specified, it should be included,
+            // even if it has no levels or keywords. An empty object {} for a URL
+            // will signify "no keyword filtering" for that URL on the backend.
+            // So, we remove the condition that deletes the URL filter if it has no levels.
+            // if (Object.keys(formData.url_filters[url]).length === 0) {
+            //     delete formData.url_filters[url];
+            // }
         });
 
         if (!formIsValid) {
@@ -334,10 +380,40 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             const result = await response.json();
             if (response.ok) {
-                displayMessage(successMessageGlobal, result.message || 'Configuration saved successfully!', false);
-                currentConfig = formData; // Update local currentConfig on successful save
-                // Optionally re-fetch or just re-populate to ensure UI consistency if backend modifies data
-                populateForm(currentConfig); // Re-populate to clean up UI (e.g. re-number levels if some were deleted)
+                const oldUrlFilterKeys = new Set(initialUrlFilterKeys); // Keys before this successful save
+                currentConfig = formData; // Update global currentConfig with successfully saved data
+                
+                const newUrlFilterKeys = new Set(Object.keys(currentConfig.url_filters || {}));
+                let newlyAddedUrl = null;
+                for (const urlKey of newUrlFilterKeys) {
+                    if (!oldUrlFilterKeys.has(urlKey)) {
+                        newlyAddedUrl = urlKey;
+                        break;
+                    }
+                }
+                
+                populateForm(currentConfig); // Re-populate form, which rebuilds DOM for filters
+                initialUrlFilterKeys = newUrlFilterKeys; // Update baseline for the next save operation
+
+                if (newlyAddedUrl) {
+                    const allUrlInputs = urlFiltersContainer.querySelectorAll('.url-input');
+                    let targetBlock = null;
+                    allUrlInputs.forEach(input => {
+                        if (input.value === newlyAddedUrl) {
+                            targetBlock = input.closest('.url-filter-block');
+                        }
+                    });
+                    if (targetBlock) {
+                        displayMessage(successMessageGlobal, result.message || 'Configuration saved successfully!', false, targetBlock);
+                        targetBlock.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    } else {
+                         // Fallback to global message if somehow the block isn't found (should not happen)
+                        displayMessage(successMessageGlobal, result.message || 'Configuration saved successfully!', false);
+                    }
+                } else {
+                    // No new URL added, or change was to other fields. Show global message.
+                    displayMessage(successMessageGlobal, result.message || 'Configuration saved successfully!', false);
+                }
             } else {
                 displayMessage(errorMessageGlobal, result.detail || 'Failed to save configuration.');
             }
