@@ -2,7 +2,7 @@
 services:
   fb-mp-rss:
     build: . # Build from local Dockerfile
-    # image: regek/fb-mp-rss:latest # Comment out or remove if building locally
+    image: bethekind/fb-mp-rss:latest # Specifies the image to use or build
     container_name: fb-mp-rss
     restart: always
     environment:

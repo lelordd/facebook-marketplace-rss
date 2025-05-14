@@ -1,0 +1,18 @@
+Facebook Marketplace RSS Monitor
+
+This project incorporates and builds upon software developed by multiple contributors.
+
+--------------------------------------------------------------------------------
+Portions Copyright (c) 2024, regek
+--------------------------------------------------------------------------------
+The initial codebase, up to commit 719ef6e9c7fc287a9dcac28d461c83d690cbb4f8,
+was developed by 'regek' and is licensed under the BSD 3-Clause License.
+The full text of this license can be found in the LICENSE file.
+
+--------------------------------------------------------------------------------
+Portions Copyright (c) 2025, bethekind
+--------------------------------------------------------------------------------
+All code developed after commit 719ef6e9c7fc287a9dcac28d461c83d690cbb4f8
+constitutes original work by 'bethekind' and is also licensed under the
+BSD 3-Clause License.
+The full text of this license can be found in the LICENSE file.
