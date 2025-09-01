@@ -37,8 +37,8 @@ RUN apt-get update && \
     apt-get install -y firefox && \
     rm -rf /var/lib/apt/lists/*
 
-# Create a non-root user
-RUN useradd -m -s /bin/bash appuser
+# Create a non-root user with UID 501 (matching host user)
+RUN useradd -m -s /bin/bash -u 501 appuser
 
 # Change ownership of the /app directory
 RUN chown -R appuser:appuser /app

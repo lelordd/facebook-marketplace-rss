@@ -413,12 +413,13 @@ class fbRssAdMonitor:
             self.logger.error(f"Error saving HTML to {filename}: {e}")
 
 
-    def get_page_content(self, url: str) -> Optional[str]:
+    def get_page_content(self, url: str, max_retries: int = 2) -> Optional[str]:
         """
-        Fetches the page content using Selenium.
+        Fetches the page content using Selenium with retry mechanism.
 
         Args:
             url (str): The URL of the page to fetch.
+            max_retries (int): Maximum number of retry attempts.
 
         Returns:
             Optional[str]: The HTML content of the page, or None if an error occurred.
@@ -426,30 +427,66 @@ class fbRssAdMonitor:
         if not self.driver:
              self.logger.error("Selenium driver not initialized. Cannot fetch page content.")
              return None
-        try:
-            self.logger.info(f"Requesting URL: {url}")
-            self.driver.get(url)
-            # Wait for a container element that typically holds the ads
-            WebDriverWait(self.driver, 20).until( # Increased wait time
-                EC.presence_of_element_located((By.CSS_SELECTOR, AD_DIV_SELECTOR))
-            )
-            self.logger.debug(f"Page content loaded successfully for {url}")
-            return self.driver.page_source
-        except WebDriverException as e:
-            self.logger.error(f"Selenium error fetching page content for {url}: {e}")
-            # Optionally save page source on error for debugging
-            # try:
-            #     page_source_on_error = self.driver.page_source
-            #     error_filename = f"error_page_{int(time.time())}.html"
-            #     with open(error_filename, "w", encoding="utf-8") as f:
-            #         f.write(page_source_on_error)
-            #     self.logger.info(f"Saved page source on error to {error_filename}")
-            # except Exception as save_err:
-            #      self.logger.error(f"Could not save page source on error: {save_err}")
-            return None
-        except Exception as e:
-            self.logger.exception(f"Unexpected error fetching page content for {url}: {e}")
-            return None
+        
+        for attempt in range(max_retries + 1):
+            try:
+                self.logger.info(f"Requesting URL: {url} (attempt {attempt + 1}/{max_retries + 1})")
+                self.driver.get(url)
+                
+                # Wait for page to load with multiple fallback strategies
+                try:
+                    # First try the original selector
+                    WebDriverWait(self.driver, 15).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, AD_DIV_SELECTOR))
+                    )
+                except TimeoutException:
+                    # Fallback: wait for any div that might contain ads
+                    try:
+                        WebDriverWait(self.driver, 10).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, "div[role='main'], div[data-pagelet='MarketplacePDP'], main"))
+                        )
+                        self.logger.warning(f"Using fallback selector for {url} - AD_DIV_SELECTOR may be outdated")
+                    except TimeoutException:
+                        # Final fallback: wait for body to be present
+                        WebDriverWait(self.driver, 5).until(
+                            EC.presence_of_element_located((By.TAG_NAME, "body"))
+                        )
+                        self.logger.warning(f"Using body tag fallback for {url} - page structure may have changed")
+                
+                # Additional wait for JavaScript to complete
+                WebDriverWait(self.driver, 5).until(
+                    lambda driver: driver.execute_script("return document.readyState") == "complete"
+                )
+                
+                self.logger.debug(f"Page content loaded successfully for {url}")
+                return self.driver.page_source
+                
+            except WebDriverException as e:
+                if attempt == max_retries:
+                    self.logger.error(f"Selenium error fetching page content for {url} after {max_retries + 1} attempts: {e}")
+                    # Save page source for debugging on final failure
+                    try:
+                        page_source = self.driver.page_source if self.driver else "No driver available"
+                        error_filename = f"error_page_{int(time.time())}.html"
+                        with open(error_filename, "w", encoding="utf-8") as f:
+                            f.write(f"<!-- Error: {e} -->\n")
+                            f.write(f"<!-- URL: {url} -->\n")
+                            f.write(page_source)
+                        self.logger.info(f"Saved error page source to {error_filename}")
+                    except Exception as save_err:
+                         self.logger.error(f"Could not save page source on error: {save_err}")
+                    return None
+                else:
+                    self.logger.warning(f"Selenium error on attempt {attempt + 1} for {url}: {e}. Retrying...")
+                    time.sleep(2)  # Wait before retry
+                    
+            except Exception as e:
+                if attempt == max_retries:
+                    self.logger.exception(f"Unexpected error fetching page content for {url} after {max_retries + 1} attempts: {e}")
+                    return None
+                else:
+                    self.logger.warning(f"Unexpected error on attempt {attempt + 1} for {url}: {e}. Retrying...")
+                    time.sleep(2)  # Wait before retry
 
 
     def get_ads_hash(self, content: str) -> str:
@@ -504,17 +541,39 @@ class fbRssAdMonitor:
                 processed_urls.add(full_url)
 
 
-                # Find title and price within the context of the current link
-                # Look for a span with the specific style attribute for the title
+                # Find title and price with multiple fallback strategies
+                title = None
+                price = None
+                
+                # Strategy 1: Original selectors
                 title_span = ad_link.find('span', style=lambda value: value and AD_TITLE_SELECTOR_STYLE in value)
-                # Look for a span with dir='auto' for the price (more reliable than just text)
                 price_span = ad_link.find('span', dir=AD_PRICE_SELECTOR_DIR)
-
-                if title_span and price_span:
+                
+                if title_span:
                     title = title_span.get_text(strip=True)
+                if price_span:
                     price = price_span.get_text(strip=True)
-
-                    # Validate price format (starts with currency or is 'free')
+                
+                # Strategy 2: Fallback - look for common title/price patterns
+                if not title or not price:
+                    # Look for spans with common Marketplace classes
+                    all_spans = ad_link.find_all('span')
+                    for span in all_spans:
+                        span_text = span.get_text(strip=True)
+                        if span_text and len(span_text) > 10 and not title:  # Likely title
+                            title = span_text
+                        elif span_text and (span_text.startswith(self.currency) or 'free' in span_text.lower()) and not price:
+                            price = span_text
+                
+                # Strategy 3: Final fallback - text content analysis
+                if not title:
+                    # Use link text or nearby text as title
+                    link_text = ad_link.get_text(strip=True)
+                    if link_text and len(link_text) > 10:
+                        title = link_text
+                
+                if title and price:
+                    # Validate price format
                     if price.startswith(self.currency) or 'free' in price.lower():
                         # Generate a unique ID based on the ad's URL
                         ad_id_hash = self.get_ads_hash(full_url)
