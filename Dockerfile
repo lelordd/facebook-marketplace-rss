@@ -43,13 +43,13 @@ RUN useradd -m -s /bin/bash -u 501 appuser
 # Change ownership of the /app directory
 RUN chown -R appuser:appuser /app
 
-# Switch to the non-root user
-USER appuser
-
 # Copy the current directory contents into the container at /app
 COPY --chown=appuser:appuser . /app
-# Ensure config.json has proper permissions for writing
+# Ensure config.json has proper permissions for writing (as root before switching user)
 RUN chmod 666 /app/config.json
+
+# Switch to the non-root user
+USER appuser
 
 # Install Python packages specified in requirements.txt
 RUN pip3 install --no-cache-dir -r requirements.txt --break-system-packages
