@@ -17,6 +17,7 @@ from logging.handlers import RotatingFileHandler
 from threading import Lock, RLock
 from typing import Any, Dict, List, Optional, Tuple
 import waitress
+from shutil import which # For finding executables in PATH
 import shutil # For config backup
 from urllib.parse import urlparse # For URL validation
 
@@ -28,7 +29,7 @@ from bs4 import BeautifulSoup
 from dateutil import parser
 from flask import Flask, Response, jsonify, request, render_template, send_from_directory
 from selenium import webdriver
-from selenium.common.exceptions import WebDriverException
+from selenium.common.exceptions import WebDriverException, TimeoutException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from selenium.webdriver.firefox.service import Service as FirefoxService
@@ -176,6 +177,39 @@ class fbRssAdMonitor:
         try:
             self.logger.debug("Initializing Selenium WebDriver...")
             firefox_options = FirefoxOptions()
+            # Specify Firefox binary path explicitly for Docker compatibility
+            # Try multiple possible Firefox binary locations for different environments
+            possible_paths = [
+                # Homebrew macOS path
+                "/opt/homebrew/bin/firefox",
+                # Standard macOS paths
+                "/Applications/Firefox.app/Contents/MacOS/firefox",
+                "/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox",
+                # Standard Linux paths
+                "/usr/bin/firefox",
+                "/usr/lib/firefox/firefox",
+                "/snap/bin/firefox",
+                "/opt/firefox/firefox",
+                "/usr/local/bin/firefox",
+                "/app/firefox/firefox",
+                "/firefox/firefox",
+                # Common Docker/Ubuntu paths
+                "/usr/bin/firefox-esr",
+                "/usr/lib/firefox-esr/firefox-esr"
+            ]
+            
+            firefox_path = None
+            for path in possible_paths:
+                if os.path.exists(path):
+                    firefox_path = path
+                    break
+            
+            if firefox_path:
+                firefox_options.binary_location = firefox_path
+                self.logger.debug(f"Using Firefox binary at: {firefox_path}")
+            else:
+                self.logger.warning("Firefox binary not found in standard locations. Letting webdriver-manager handle it automatically.")
+                # Don't set binary_location, let webdriver-manager find it
             firefox_options.add_argument("--no-sandbox")
             firefox_options.add_argument("--disable-dev-shm-usage")
             firefox_options.add_argument("--private")
@@ -192,7 +226,12 @@ class fbRssAdMonitor:
             os.environ['WDM_LOCAL'] = '1' # Try to use local cache
             # Note: WDM might still log to stderr/stdout depending on its internal setup
 
-            gecko_driver_path = GeckoDriverManager().install()
+            # Use locally installed geckodriver to avoid GitHub API rate limits
+            gecko_driver_path = which('geckodriver')
+            if not gecko_driver_path:
+                self.logger.warning("geckodriver not found in PATH, falling back to webdriver-manager")
+                gecko_driver_path = GeckoDriverManager().install()
+            
             # Redirect selenium service logs to /dev/null (or NUL on windows) to prevent console spam
             service_log_path = 'nul' if os.name == 'nt' else '/dev/null'
             self.driver = webdriver.Firefox(

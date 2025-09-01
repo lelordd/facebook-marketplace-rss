@@ -1,20 +1,13 @@
 {
     "server_ip": "0.0.0.0",
-    "server_port": 5000,
+    "server_port": 5001,
     "currency": "CHF",
     "refresh_interval_minutes": 15,
-    "log_filename": "fb-rssfeed.log",
-    "database_name": "fb-rss-feed.db",
     "url_filters": {
-        "https://www.facebook.com/marketplace/category/search?query=smart%20tv&exact=false": {
-            "level1": ["tv"],
-            "level2": ["smart"],
-            "level3": ["55\"", "55 inch"]
-        },
-        "https://www.facebook.com/marketplace/category/search?query=dishwasher&exact=false": {
-            "level1": ["dishwasher"],
-            "level2": ["kitchenaid", "samsung"]
-        },
-        "https://www.facebook.com/marketplace/category/search?query=free%20stuff&exact=false": {}
+        "https://www.facebook.com/marketplace/115456095134627/search/?query=pax": {
+            "level1": [
+                "pax"
+            ]
+        }
     }
 }
